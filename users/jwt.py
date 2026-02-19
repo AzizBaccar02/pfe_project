@@ -3,7 +3,7 @@ from django.contrib.auth import authenticate
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework import serializers
 
-from .tokens import CustomRefreshToken  # ✅ add this import
+from .tokens import CustomRefreshToken  # add this import
 
 User = get_user_model()
 
@@ -27,7 +27,12 @@ class EmailTokenObtainPairSerializer(TokenObtainPairSerializer):
         if user is None or not user.is_active:
             raise serializers.ValidationError("No active account found with the given credentials")
 
-        # ✅ use your custom token so it contains role
+        # Block login if email not verified
+        if not user.isEmailVerified:
+            raise serializers.ValidationError("Please verify your email first.")
+
+
+        # use your custom token so it contains role
         refresh = CustomRefreshToken.for_user(user)
 
         return {

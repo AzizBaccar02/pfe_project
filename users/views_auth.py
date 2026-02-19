@@ -5,3 +5,4 @@ from .jwt import EmailTokenObtainPairSerializer
 class LoginView(TokenObtainPairView):
     permission_classes = [AllowAny]
     serializer_class = EmailTokenObtainPairSerializer
+

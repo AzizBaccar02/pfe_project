@@ -4,15 +4,7 @@ from rest_framework import status
 from rest_framework.permissions import AllowAny
 
 from .serializers import SignUpSerializer, UserPublicSerializer
-from .tokens import CustomRefreshToken
-
-
-def get_tokens_for_user(user):
-    refresh = CustomRefreshToken.for_user(user)
-    return {
-        "refresh": str(refresh),
-        "access": str(refresh.access_token),
-    }
+from .email_utils import send_verification_code_email
 
 
 class SignUpView(APIView):
@@ -24,14 +16,14 @@ class SignUpView(APIView):
 
         result = serializer.save()
         user = result["user"]
+        code = result["code"]
 
-        tokens = get_tokens_for_user(user)
+        send_verification_code_email(user.email, code)
 
         return Response(
             {
-                "message": "Account created. Logged in successfully.",
+                "message": "Account created. Please verify your email.",
                 "user": UserPublicSerializer(user).data,
-                "tokens": tokens,
             },
             status=status.HTTP_201_CREATED,
         )
