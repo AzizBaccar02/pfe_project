@@ -1,4 +1,4 @@
-from django.urls import path
+from django.urls import path, include
 from .views import SignUpView
 from .views_password_reset import ForgotPasswordView, ResetPasswordConfirmView
 from .views_resend import ResendCodeView
@@ -10,4 +10,7 @@ urlpatterns = [
     path("resend-code/", ResendCodeView.as_view(), name="resend_code"),
     path("forgot-password/", ForgotPasswordView.as_view(), name="forgot_password"),
     path("reset-password/", ResetPasswordConfirmView.as_view(), name="reset_password"),
+    path("", include("users.common_profile.urls")),
+    path("client/profile/", include("users.client_profile.urls")),
+
 ]
