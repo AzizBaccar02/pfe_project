@@ -35,3 +35,11 @@ class Offre(models.Model):
         null=True,
         related_name="category_offres"
     )
+
+class Images(models.Model):
+    url = models.ImageField(upload_to="offers/")
+    offre = models.ForeignKey(
+        "offers.Offre",
+        on_delete=models.CASCADE,
+        related_name="images"
+    )
