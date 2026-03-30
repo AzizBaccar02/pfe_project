@@ -14,10 +14,26 @@ def send_email(to_email: str, subject: str, message: str) -> None:
 
 def send_verification_code_email(to_email: str, code: str) -> None:
     subject = "Email verification"
-    message = f"Your verification code is: {code}"
+    message = f""" 
+    Hello,
+    
+    Your JobMatch verification code is: {code}
+    
+    This code expires in 24 hours.
+    
+    If you did not create this account, please ignore this email.
+    JobMatch Team
+    """
     send_email(to_email, subject, message)
-
 def send_password_reset_code_email(to_email: str, code: str) -> None:
     subject = "Password reset"
-    message = f"Your password reset code is: {code}"
+    message = f"""
+    Hello,
+
+    Your JobMatch password reset code is: {code}
+
+    If you did not request a password reset, please ignore this email.
+
+    JobMatch Team
+    """
     send_email(to_email, subject, message)

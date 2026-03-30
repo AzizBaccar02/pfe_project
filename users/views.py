@@ -22,7 +22,7 @@ class SignUpView(APIView):
 
         return Response(
             {
-                "message": "Account created. Please verify your email.",
+                "message": "Account created successfully. Verification code sent to email.",
                 "user": UserPublicSerializer(user).data,
             },
             status=status.HTTP_201_CREATED,
