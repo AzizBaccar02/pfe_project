@@ -1,3 +1,6 @@
+##chats/models.py
+
+
 from django.db import models
 
 
@@ -8,7 +11,11 @@ class ChatStatus(models.TextChoices):
 
 class Chat(models.Model):
     createdAt = models.DateTimeField(auto_now_add=True)
-    status = models.CharField(max_length=10, choices=ChatStatus.choices)
+    status = models.CharField(
+        max_length=10,
+        choices=ChatStatus.choices,
+        default=ChatStatus.ACTIVE,
+    )
     client = models.ForeignKey(
         "users.CustomUser",
         on_delete=models.CASCADE,
@@ -21,8 +28,10 @@ class Chat(models.Model):
     )
     offreReaction = models.ForeignKey(
         "interactions.OffreReaction",
-        on_delete=models.CASCADE,
-        related_name="chats"
+        on_delete=models.SET_NULL,
+        related_name="chats",
+        null=True,
+        blank=True,
     )
 
 

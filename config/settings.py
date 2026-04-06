@@ -30,6 +30,8 @@ ALLOWED_HOSTS = ['*']
 # Application definition
 
 INSTALLED_APPS = [
+    "daphne",  # keep this before django.contrib.staticfiles
+    "channels",
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -45,6 +47,7 @@ INSTALLED_APPS = [
     'interactions',
     'chats',
     'notifications',
+
 ]
 
 MIDDLEWARE = [
@@ -83,9 +86,9 @@ WSGI_APPLICATION = 'config.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'jobmatch_db',
+        'NAME': 'jobmatch_database',
         'USER': 'postgres',
-        'PASSWORD': '1966',
+        'PASSWORD': 'admin',
         'HOST': '127.0.0.1',
         'PORT': '5432',
     }
@@ -148,3 +151,10 @@ EMAIL_USE_TLS = True
 EMAIL_HOST_USER = "azizbaccar79@gmail.com"
 EMAIL_HOST_PASSWORD = "lsxi lwjp wsnp ciii"
 DEFAULT_FROM_EMAIL = "JobMatch <azizbaccar79@gmail.com>"
+##################################################################################################
+ASGI_APPLICATION = "config.asgi.application"
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels.layers.InMemoryChannelLayer",
+    },
+}
