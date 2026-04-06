@@ -12,5 +12,6 @@ urlpatterns = [
     path("reset-password/", ResetPasswordConfirmView.as_view(), name="reset_password"),
     path("", include("users.common_profile.urls")),
     path("client/profile/", include("users.client_profile.urls")),
+    path("agent/profile/", include("users.agent_profile.urls")),
 
 ]

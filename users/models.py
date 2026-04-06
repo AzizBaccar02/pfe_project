@@ -11,7 +11,6 @@ class Role(models.TextChoices):
 class CustomUser(AbstractUser):
     role = models.CharField(max_length=50, choices=Role.choices)
     isEmailVerified = models.BooleanField(default=False)
-    isActive = models.BooleanField(default=True)
     createdAt = models.DateTimeField(auto_now_add=True)
     email = models.EmailField(unique=True)
 
