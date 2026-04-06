@@ -16,6 +16,8 @@ urlpatterns = [
     path("api/auth/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
     path("api/auth/logout/", LogoutView.as_view(), name="logout"),
     path("api/", include("offers.urls")),
+    path("api/", include("notifications.urls")),
+    path("api/", include("chats.urls")),
 ]
 
 urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
