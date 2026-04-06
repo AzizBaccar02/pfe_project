@@ -28,32 +28,6 @@ class ClientProfileView(APIView):
         serializer = ClientProfileSerializer(profile)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-    def post(self, request):
-        if request.user.role != Role.CLIENT:
-            return Response(
-                {"detail": "Only clients can create this profile."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
-        try:
-            request.user.profile
-            return Response(
-                {"detail": "Profile already exists. Use PUT or PATCH to update it."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        except Profile.DoesNotExist:
-            pass
-
-        serializer = ClientProfileSerializer(
-            data=request.data,
-            context={"request": request}
-        )
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
     def put(self, request):
         if request.user.role != Role.CLIENT:
             return Response(
