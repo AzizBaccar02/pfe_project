@@ -86,9 +86,9 @@ WSGI_APPLICATION = 'config.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'jobmatch_database',
+        'NAME': 'jobmatch_db',
         'USER': 'postgres',
-        'PASSWORD': 'admin',
+        'PASSWORD': '1966',
         'HOST': '127.0.0.1',
         'PORT': '5432',
     }
