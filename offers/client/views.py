@@ -1,3 +1,5 @@
+from django.db import transaction
+
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -5,6 +7,11 @@ from rest_framework.views import APIView
 
 from users.models import Role
 from offers.models import Offre, Images, OffreStatut
+from subscriptions.services.usage_service import (
+    consume_subscription_usage,
+    SubscriptionUsageAction,
+)
+
 from .serializers import (
     ClientOfferCreateSerializer,
     ClientOfferListSerializer,
@@ -37,14 +44,23 @@ class ClientOfferListCreateView(APIView):
 
         serializer = ClientOfferCreateSerializer(
             data=request.data,
-            context={"request": request}
+            context={"request": request},
         )
+
         if serializer.is_valid():
-            offer = serializer.save()
+            with transaction.atomic():
+                consume_subscription_usage(
+                    request.user,
+                    SubscriptionUsageAction.CREATE_OFFER,
+                )
+
+                offer = serializer.save()
+
             return Response(
                 ClientOfferDetailSerializer(offer).data,
                 status=status.HTTP_201_CREATED,
             )
+
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -95,6 +111,7 @@ class ClientOfferDetailView(APIView):
                 ClientOfferDetailSerializer(offer).data,
                 status=status.HTTP_200_OK,
             )
+
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def patch(self, request, offer_id):
@@ -118,6 +135,7 @@ class ClientOfferDetailView(APIView):
                 ClientOfferDetailSerializer(offer).data,
                 status=status.HTTP_200_OK,
             )
+
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def delete(self, request, offer_id):
