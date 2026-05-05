@@ -14,6 +14,10 @@ class CustomUser(AbstractUser):
     createdAt = models.DateTimeField(auto_now_add=True)
     email = models.EmailField(unique=True)
 
+    freeUsageLimit = models.PositiveIntegerField(default=10)
+    remainingFreeUsageCount = models.PositiveIntegerField(default=10)
+    usedFreeUsageCount = models.PositiveIntegerField(default=0)
+
 
 class Profile(models.Model):
     phone = models.CharField(max_length=30)

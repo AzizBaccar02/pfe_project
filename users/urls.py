@@ -3,9 +3,12 @@ from .views import SignUpView
 from .views_password_reset import ForgotPasswordView, ResetPasswordConfirmView
 from .views_resend import ResendCodeView
 from .views_verify import VerifyEmailView
+from .views import SignUpView, MeView
 
 urlpatterns = [
     path("signup/", SignUpView.as_view(), name="signup"),
+    path("me/", MeView.as_view(), name="me"),
+
     path("verify-email/", VerifyEmailView.as_view(), name="verify_email"),
     path("resend-code/", ResendCodeView.as_view(), name="resend_code"),
     path("forgot-password/", ForgotPasswordView.as_view(), name="forgot_password"),
