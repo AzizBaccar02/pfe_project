@@ -8,14 +8,14 @@ from rest_framework.views import APIView
 from users.models import Role
 from offers.models import Offre, Images, OffreStatut
 from subscriptions.services.usage_service import (
-    consume_subscription_usage,
     SubscriptionUsageAction,
+    consume_subscription_usage,
 )
 
 from .serializers import (
     ClientOfferCreateSerializer,
-    ClientOfferListSerializer,
     ClientOfferDetailSerializer,
+    ClientOfferListSerializer,
     ClientOfferUpdateSerializer,
     OfferImageSerializer,
 )
@@ -31,8 +31,18 @@ class ClientOfferListCreateView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        offers = Offre.objects.filter(client=request.user).order_by("-createdAt")
-        serializer = ClientOfferListSerializer(offers, many=True)
+        offers = (
+            Offre.objects.filter(client=request.user)
+            .select_related("localisation", "category")
+            .prefetch_related("images")
+            .order_by("-createdAt")
+        )
+
+        serializer = ClientOfferListSerializer(
+            offers,
+            many=True,
+            context={"request": request},
+        )
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def post(self, request):
@@ -56,8 +66,12 @@ class ClientOfferListCreateView(APIView):
 
                 offer = serializer.save()
 
+            detail_serializer = ClientOfferDetailSerializer(
+                offer,
+                context={"request": request},
+            )
             return Response(
-                ClientOfferDetailSerializer(offer).data,
+                detail_serializer.data,
                 status=status.HTTP_201_CREATED,
             )
 
@@ -69,7 +83,11 @@ class ClientOfferDetailView(APIView):
 
     def get_object(self, request, offer_id):
         try:
-            return Offre.objects.get(id=offer_id, client=request.user)
+            return (
+                Offre.objects.select_related("localisation", "category")
+                .prefetch_related("images")
+                .get(id=offer_id, client=request.user)
+            )
         except Offre.DoesNotExist:
             return None
 
@@ -87,7 +105,10 @@ class ClientOfferDetailView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        serializer = ClientOfferDetailSerializer(offer)
+        serializer = ClientOfferDetailSerializer(
+            offer,
+            context={"request": request},
+        )
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def put(self, request, offer_id):
@@ -104,13 +125,20 @@ class ClientOfferDetailView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        serializer = ClientOfferUpdateSerializer(offer, data=request.data)
+        serializer = ClientOfferUpdateSerializer(
+            offer,
+            data=request.data,
+            context={"request": request},
+        )
+
         if serializer.is_valid():
-            serializer.save()
-            return Response(
-                ClientOfferDetailSerializer(offer).data,
-                status=status.HTTP_200_OK,
+            updated_offer = serializer.save()
+
+            detail_serializer = ClientOfferDetailSerializer(
+                updated_offer,
+                context={"request": request},
             )
+            return Response(detail_serializer.data, status=status.HTTP_200_OK)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -128,13 +156,21 @@ class ClientOfferDetailView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        serializer = ClientOfferUpdateSerializer(offer, data=request.data, partial=True)
+        serializer = ClientOfferUpdateSerializer(
+            offer,
+            data=request.data,
+            partial=True,
+            context={"request": request},
+        )
+
         if serializer.is_valid():
-            serializer.save()
-            return Response(
-                ClientOfferDetailSerializer(offer).data,
-                status=status.HTTP_200_OK,
+            updated_offer = serializer.save()
+
+            detail_serializer = ClientOfferDetailSerializer(
+                updated_offer,
+                context={"request": request},
             )
+            return Response(detail_serializer.data, status=status.HTTP_200_OK)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -185,11 +221,16 @@ class ClientOfferImagesView(APIView):
             )
 
         created_images = []
+
         for file in files:
             image = Images.objects.create(offre=offer, url=file)
             created_images.append(image)
 
-        serializer = OfferImageSerializer(created_images, many=True)
+        serializer = OfferImageSerializer(
+            created_images,
+            many=True,
+            context={"request": request},
+        )
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
     def get(self, request, offer_id):
@@ -207,7 +248,11 @@ class ClientOfferImagesView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        serializer = OfferImageSerializer(offer.images.all(), many=True)
+        serializer = OfferImageSerializer(
+            offer.images.all(),
+            many=True,
+            context={"request": request},
+        )
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
@@ -222,7 +267,11 @@ class ClientOfferStatusView(APIView):
             )
 
         try:
-            offer = Offre.objects.get(id=offer_id, client=request.user)
+            offer = (
+                Offre.objects.select_related("localisation", "category")
+                .prefetch_related("images")
+                .get(id=offer_id, client=request.user)
+            )
         except Offre.DoesNotExist:
             return Response(
                 {"detail": "Offer not found."},
@@ -230,7 +279,11 @@ class ClientOfferStatusView(APIView):
             )
 
         new_status = request.data.get("status")
-        allowed_statuses = [OffreStatut.OPEN, OffreStatut.CLOSED, OffreStatut.ARCHIVED]
+        allowed_statuses = [
+            OffreStatut.OPEN,
+            OffreStatut.CLOSED,
+            OffreStatut.ARCHIVED,
+        ]
 
         if new_status not in allowed_statuses:
             return Response(
@@ -241,7 +294,8 @@ class ClientOfferStatusView(APIView):
         offer.status = new_status
         offer.save()
 
-        return Response(
-            ClientOfferDetailSerializer(offer).data,
-            status=status.HTTP_200_OK,
+        serializer = ClientOfferDetailSerializer(
+            offer,
+            context={"request": request},
         )
+        return Response(serializer.data, status=status.HTTP_200_OK)
