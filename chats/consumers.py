@@ -8,6 +8,10 @@ from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 
 from django.contrib.auth import get_user_model
 from chats.models import Chat, Message, ChatStatus
+from chats.services.message_moderation_service import (
+    build_moderation_response_data,
+    moderate_message_content,
+)
 
 User = get_user_model()
 
@@ -35,26 +39,55 @@ class ChatConsumer(AsyncWebsocketConsumer):
         await self.channel_layer.group_discard(self.group_name, self.channel_name)
 
     async def receive(self, text_data):
-        data = json.loads(text_data)
+        try:
+            data = json.loads(text_data)
+        except json.JSONDecodeError:
+            await self.send(
+                text_data=json.dumps(
+                    {
+                        "error": "Invalid JSON format."
+                    }
+                )
+            )
+            return
+
         content = data.get("content", "").strip()
 
         if not content:
-            await self.send(text_data=json.dumps({
-                "error": "content is required"
-            }))
+            await self.send(
+                text_data=json.dumps(
+                    {
+                        "error": "content is required"
+                    }
+                )
+            )
             return
 
         allowed = await self.user_can_access_chat(self.user.id, self.chat_id)
         if not allowed:
-            await self.send(text_data=json.dumps({
-                "error": "You are not allowed to send messages in this chat"
-            }))
+            await self.send(
+                text_data=json.dumps(
+                    {
+                        "error": "You are not allowed to send messages in this chat"
+                    }
+                )
+            )
             return
+
+        moderated_content, has_warning, detected_words = moderate_message_content(
+            content
+        )
 
         message_data = await self.create_message(
             chat_id=self.chat_id,
             sender_id=self.user.id,
-            content=content,
+            content=moderated_content,
+        )
+
+        message_data = build_moderation_response_data(
+            data=message_data,
+            has_warning=has_warning,
+            detected_words=detected_words,
         )
 
         await self.channel_layer.group_send(
@@ -68,12 +101,15 @@ class ChatConsumer(AsyncWebsocketConsumer):
     async def chat_message(self, event):
         message = event["message"]
 
-        await self.send(text_data=json.dumps({
-            "type": "new_message",
-            "message": message,
-        }))
+        await self.send(
+            text_data=json.dumps(
+                {
+                    "type": "new_message",
+                    "message": message,
+                }
+            )
+        )
 
-        # If this connected user is the receiver, mark message as seen automatically
         if message["sender"] != self.user.id:
             updated = await self.mark_message_as_read(message["id"], self.user.id)
 
@@ -88,11 +124,25 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 )
 
     async def message_seen(self, event):
-        await self.send(text_data=json.dumps({
-            "type": "message_seen",
-            "message_id": event["message_id"],
-            "reader_id": event["reader_id"],
-        }))
+        await self.send(
+            text_data=json.dumps(
+                {
+                    "type": "message_seen",
+                    "message_id": event["message_id"],
+                    "reader_id": event["reader_id"],
+                }
+            )
+        )
+
+    async def messages_seen(self, event):
+        await self.send(
+            text_data=json.dumps(
+                {
+                    "type": "messages_seen",
+                    "reader_id": event["reader_id"],
+                }
+            )
+        )
 
     async def get_user_from_jwt(self):
         try:
@@ -116,7 +166,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
         token_backend = TokenBackend(
             algorithm="HS256",
-            signing_key=settings.SECRET_KEY
+            signing_key=settings.SECRET_KEY,
         )
         decoded_data = token_backend.decode(validated_token.token, verify=True)
         user_id = decoded_data.get("user_id")
@@ -163,7 +213,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         try:
             message = Message.objects.select_related("chat").get(
                 id=message_id,
-                chat_id=self.chat_id
+                chat_id=self.chat_id,
             )
         except Message.DoesNotExist:
             return False

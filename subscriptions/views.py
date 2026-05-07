@@ -292,6 +292,7 @@ def _sync_subscription_from_stripe(stripe_subscription):
         plan_id = existing_subscription.plan_id
 
     if not user_id:
+        print("Stripe sync skipped: user_id not found.")
         return
 
     plan = None
@@ -377,50 +378,111 @@ def stripe_webhook_view(request):
         if event_type == "checkout.session.completed":
             checkout_session = data_object
 
+            checkout_session_id = _stripe_value(checkout_session, "id")
             metadata = _stripe_value(checkout_session, "metadata", {}) or {}
+
             user_id = _stripe_value(metadata, "user_id")
             plan_id = _stripe_value(metadata, "plan_id")
 
             stripe_subscription_id = _stripe_value(checkout_session, "subscription")
             stripe_customer_id = _stripe_value(checkout_session, "customer")
+            transaction_id = _stripe_value(checkout_session, "payment_intent")
 
-            if user_id:
-                plan = None
-                if plan_id:
-                    plan = Plan.objects.filter(id=plan_id).first()
+            existing_subscription = None
 
-                subscription_data = {
-                    "status": SubscriptionStatus.ACTIVE,
-                    "isActive": True,
-                    "stripeCustomerId": stripe_customer_id,
-                    "stripeSubscriptionId": stripe_subscription_id,
-                    "stripeCheckoutSessionId": _stripe_value(checkout_session, "id"),
-                    "transactionId": _stripe_value(checkout_session, "payment_intent"),
-                }
-
-                if plan_id:
-                    subscription_data["plan_id"] = plan_id
-
-                subscription_data = _apply_plan_usage_data(
-                    subscription_data=subscription_data,
-                    plan=plan,
-                    initialize_usage=True,
+            if checkout_session_id:
+                existing_subscription = (
+                    Subscription.objects
+                    .filter(stripeCheckoutSessionId=checkout_session_id)
+                    .select_related("plan", "user")
+                    .first()
                 )
 
-                Subscription.objects.update_or_create(
-                    user_id=user_id,
-                    defaults=subscription_data,
-                )
+            if not user_id and existing_subscription:
+                user_id = existing_subscription.user_id
 
-                if stripe_subscription_id:
-                    try:
-                        stripe_subscription = stripe.Subscription.retrieve(
-                            stripe_subscription_id,
-                            expand=["items.data.price"],
+            if not plan_id and existing_subscription and existing_subscription.plan_id:
+                plan_id = existing_subscription.plan_id
+
+            if not user_id:
+                print("Stripe webhook skipped: user_id not found.")
+                return JsonResponse({"received": True})
+
+            plan = None
+            if plan_id:
+                plan = Plan.objects.filter(id=plan_id).first()
+
+            local_status = SubscriptionStatus.ACTIVE
+            start_date = None
+            end_date = None
+            stripe_subscription = None
+
+            if stripe_subscription_id:
+                try:
+                    stripe_subscription = stripe.Subscription.retrieve(
+                        stripe_subscription_id,
+                        expand=["items.data.price"],
+                    )
+
+                    stripe_status = _stripe_value(stripe_subscription, "status")
+                    local_status = _map_stripe_subscription_status(stripe_status)
+
+                    period_start, period_end = _get_subscription_period_dates(
+                        stripe_subscription
+                    )
+
+                    start_date = _stripe_timestamp_to_datetime(period_start)
+                    end_date = _stripe_timestamp_to_datetime(period_end)
+
+                    if not stripe_customer_id:
+                        stripe_customer_id = _stripe_value(
+                            stripe_subscription,
+                            "customer",
                         )
-                        _sync_subscription_from_stripe(stripe_subscription)
-                    except Exception as stripe_error:
-                        print("Stripe subscription retrieve error:", stripe_error)
+
+                    print("Stripe checkout completed.")
+                    print("Checkout session:", checkout_session_id)
+                    print("Stripe subscription:", stripe_subscription_id)
+                    print("Start date:", start_date)
+                    print("End date:", end_date)
+
+                except Exception as stripe_error:
+                    print("Stripe subscription retrieve error:", stripe_error)
+
+            subscription_data = {
+                "status": local_status,
+                "isActive": local_status == SubscriptionStatus.ACTIVE,
+                "stripeCustomerId": stripe_customer_id,
+                "stripeSubscriptionId": stripe_subscription_id,
+                "stripeCheckoutSessionId": checkout_session_id,
+                "transactionId": transaction_id,
+            }
+
+            if plan_id:
+                subscription_data["plan_id"] = plan_id
+
+            if start_date:
+                subscription_data["startDate"] = start_date
+
+            if end_date:
+                subscription_data["endDate"] = end_date
+
+            subscription_data = _apply_plan_usage_data(
+                subscription_data=subscription_data,
+                plan=plan,
+                initialize_usage=True,
+            )
+
+            Subscription.objects.update_or_create(
+                user_id=user_id,
+                defaults=subscription_data,
+            )
+
+            if stripe_subscription:
+                try:
+                    _sync_subscription_from_stripe(stripe_subscription)
+                except Exception as sync_error:
+                    print("Stripe subscription sync error:", sync_error)
 
         elif event_type in [
             "customer.subscription.created",
@@ -434,6 +496,7 @@ def stripe_webhook_view(request):
 
         elif event_type == "invoice.paid":
             stripe_subscription_id = _stripe_value(data_object, "subscription")
+            transaction_id = _stripe_value(data_object, "payment_intent")
 
             if stripe_subscription_id:
                 try:
@@ -441,7 +504,16 @@ def stripe_webhook_view(request):
                         stripe_subscription_id,
                         expand=["items.data.price"],
                     )
+
                     _sync_subscription_from_stripe(stripe_subscription)
+
+                    if transaction_id:
+                        Subscription.objects.filter(
+                            stripeSubscriptionId=stripe_subscription_id
+                        ).update(
+                            transactionId=transaction_id,
+                        )
+
                 except Exception as stripe_error:
                     print("Stripe invoice paid sync error:", stripe_error)
 
