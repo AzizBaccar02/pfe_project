@@ -1,5 +1,3 @@
-##chats/views.py
-
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.db.models import Q
@@ -10,6 +8,10 @@ from rest_framework import status
 
 from .models import Chat, Message, ChatStatus
 from .serializers import ChatSerializer, MessageSerializer
+from .services.message_moderation_service import (
+    build_moderation_response_data,
+    moderate_message_content,
+)
 
 
 # ---------------------------
@@ -129,11 +131,26 @@ def create_message(request, chat_id):
             status=status.HTTP_403_FORBIDDEN,
         )
 
-    serializer = MessageSerializer(data=request.data)
+    request_data = request.data.copy()
+    original_content = request_data.get("content", "")
+
+    moderated_content, has_warning, detected_words = moderate_message_content(
+        original_content
+    )
+
+    request_data["content"] = moderated_content
+
+    serializer = MessageSerializer(data=request_data)
 
     if serializer.is_valid():
         message = serializer.save(chat=chat, sender=request.user, isRead=False)
         data = MessageSerializer(message).data
+
+        data = build_moderation_response_data(
+            data=data,
+            has_warning=has_warning,
+            detected_words=detected_words,
+        )
 
         channel_layer = get_channel_layer()
         async_to_sync(channel_layer.group_send)(
@@ -147,6 +164,7 @@ def create_message(request, chat_id):
         return Response(data, status=status.HTTP_201_CREATED)
 
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
@@ -186,12 +204,39 @@ def update_message(request, chat_id, message_id):
             status=status.HTTP_403_FORBIDDEN,
         )
 
+    request_data = request.data.copy()
+    has_warning = False
+    detected_words = []
+
+    if "content" in request_data:
+        moderated_content, has_warning, detected_words = moderate_message_content(
+            request_data.get("content", "")
+        )
+        request_data["content"] = moderated_content
+
     partial = request.method == "PATCH"
-    serializer = MessageSerializer(message, data=request.data, partial=partial)
+    serializer = MessageSerializer(message, data=request_data, partial=partial)
 
     if serializer.is_valid():
         updated_message = serializer.save(chat=chat, sender=message.sender)
-        return Response(MessageSerializer(updated_message).data, status=status.HTTP_200_OK)
+        data = MessageSerializer(updated_message).data
+
+        data = build_moderation_response_data(
+            data=data,
+            has_warning=has_warning,
+            detected_words=detected_words,
+        )
+
+        channel_layer = get_channel_layer()
+        async_to_sync(channel_layer.group_send)(
+            f"chat_{chat.id}",
+            {
+                "type": "chat_message_updated",
+                "message": data,
+            }
+        )
+
+        return Response(data, status=status.HTTP_200_OK)
 
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -257,7 +302,6 @@ def mark_all_messages_as_read(request, chat_id):
         isRead=False
     ).count()
 
-    # real-time seen event
     channel_layer = get_channel_layer()
     async_to_sync(channel_layer.group_send)(
         f"chat_{chat.id}",

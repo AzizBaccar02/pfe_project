@@ -21,7 +21,8 @@ class AgentRecommendedOffersView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        profile = getattr(request.user, "profile", None)
+        agent = request.user
+        profile = getattr(agent, "profile", None)
 
         if not profile:
             return Response(
@@ -40,12 +41,20 @@ class AgentRecommendedOffersView(APIView):
         offers = (
             Offre.objects
             .filter(status=OffreStatut.OPEN)
-            .select_related("category", "localisation", "client")
+            .exclude(reactions__agent=agent)
+            .select_related(
+                "category",
+                "localisation",
+                "client",
+                "client__profile",
+                "client__profile__localisation",
+            )
             .order_by("-createdAt")
+            .distinct()
         )
 
         recommendations = recommend_offers_for_agent(
-            agent=request.user,
+            agent=agent,
             offers=offers,
         )
 
@@ -55,6 +64,12 @@ class AgentRecommendedOffersView(APIView):
             limit = int(limit)
         except ValueError:
             limit = 20
+
+        if limit <= 0:
+            limit = 20
+
+        if limit > 100:
+            limit = 100
 
         recommendations = recommendations[:limit]
 
@@ -66,6 +81,13 @@ class AgentRecommendedOffersView(APIView):
             localisation = offer.localisation
             category = offer.category
             client = offer.client
+
+            try:
+                client_profile = client.profile if client else None
+            except Exception:
+                client_profile = None
+
+            client_location = client_profile.localisation if client_profile else None
 
             data.append(
                 {
@@ -80,10 +102,14 @@ class AgentRecommendedOffersView(APIView):
                     "postalCode": localisation.postalCode if localisation else "",
                     "clientId": client.id if client else 0,
                     "clientUsername": client.username if client else "",
+                    "clientRating": client_profile.rating if client_profile else 0,
+                    "clientCity": client_location.city if client_location else "",
                     "createdAt": offer.createdAt,
                     "matchScore": item["matchScore"],
                     "semanticScore": item["semanticScore"],
                     "locationBoost": item["locationBoost"],
+                    "budgetBoost": item["budgetBoost"],
+                    "clientRatingBoost": item["clientRatingBoost"],
                     "matchLevel": item["matchLevel"],
                     "aiReasons": item["aiReasons"],
                 }
