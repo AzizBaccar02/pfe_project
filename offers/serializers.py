@@ -53,6 +53,31 @@ class OfferImageSerializer(serializers.ModelSerializer):
         return url
 
 
+class OfferPublicSerializer(serializers.ModelSerializer):
+    images = OfferImageSerializer(many=True, read_only=True)
+    category_name = serializers.SerializerMethodField()
+    city = serializers.CharField(source="localisation.city", read_only=True)
+
+    class Meta:
+        model = Offre
+        fields = [
+            "id",
+            "title",
+            "description",
+            "budget",
+            "status",
+            "createdAt",
+            "category",
+            "category_name",
+            "localisation",
+            "city",
+            "images",
+        ]
+
+    def get_category_name(self, obj):
+        return obj.category.name if obj.category else ""
+
+
 class ClientOfferCreateSerializer(serializers.ModelSerializer):
     city = serializers.CharField(write_only=True)
     address = serializers.CharField(write_only=True)
@@ -121,7 +146,7 @@ class ClientOfferCreateSerializer(serializers.ModelSerializer):
         try:
             from interactions.models import OffreReaction
 
-            return OffreReaction.objects.filter(offre=obj).count()
+            return OffreReaction.objects.filter(offre=obj, react=True).count()
         except Exception:
             return 0
 
@@ -218,7 +243,7 @@ class ClientOfferListSerializer(serializers.ModelSerializer):
         try:
             from interactions.models import OffreReaction
 
-            return OffreReaction.objects.filter(offre=obj).count()
+            return OffreReaction.objects.filter(offre=obj, react=True).count()
         except Exception:
             return 0
 
@@ -259,7 +284,7 @@ class ClientOfferDetailSerializer(serializers.ModelSerializer):
         try:
             from interactions.models import OffreReaction
 
-            return OffreReaction.objects.filter(offre=obj).count()
+            return OffreReaction.objects.filter(offre=obj, react=True).count()
         except Exception:
             return 0
 
