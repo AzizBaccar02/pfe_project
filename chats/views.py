@@ -2,6 +2,7 @@
 
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
+from django.db.models import Q
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -354,9 +355,59 @@ def get_messages_by_chat_id(request, chat_id):
             status=status.HTTP_403_FORBIDDEN,
         )
 
-    messages = Message.objects.filter(chat_id=chat_id).order_by("sentAt")
-    serializer = MessageSerializer(messages, many=True)
-    return Response(serializer.data, status=status.HTTP_200_OK)
+    limit_param = request.query_params.get("limit")
+    before_param = request.query_params.get("before")
+
+    if not limit_param:
+        messages = Message.objects.filter(chat_id=chat_id).order_by("sentAt", "id")
+        serializer = MessageSerializer(messages, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    try:
+        limit = int(limit_param)
+    except (TypeError, ValueError):
+        limit = 10
+
+    limit = max(1, min(limit, 30))
+
+    queryset = Message.objects.filter(chat_id=chat_id).order_by("-sentAt", "-id")
+
+    if before_param:
+        try:
+            before_message = Message.objects.get(
+                id=int(before_param),
+                chat_id=chat_id,
+            )
+        except (ValueError, Message.DoesNotExist):
+            return Response(
+                {"error": "Invalid before cursor"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        queryset = queryset.filter(
+            Q(sentAt__lt=before_message.sentAt)
+            | Q(sentAt=before_message.sentAt, id__lt=before_message.id)
+        )
+
+    page_items = list(queryset[: limit + 1])
+
+    has_more = len(page_items) > limit
+    page_items = page_items[:limit]
+
+    page_items.reverse()
+
+    serializer = MessageSerializer(page_items, many=True)
+
+    next_before = page_items[0].id if page_items else None
+
+    return Response(
+        {
+            "results": serializer.data,
+            "hasMore": has_more,
+            "nextBefore": next_before,
+        },
+        status=status.HTTP_200_OK,
+    )
 
 
 @api_view(["PUT", "PATCH"])
@@ -368,6 +419,12 @@ def update_message(request, chat_id, message_id):
         return Response(
             {"error": "Chat not found"},
             status=status.HTTP_404_NOT_FOUND,
+        )
+
+    if chat.status != ChatStatus.ACTIVE:
+        return Response(
+            {"error": "Chat is closed"},
+            status=status.HTTP_400_BAD_REQUEST,
         )
 
     try:
@@ -385,17 +442,21 @@ def update_message(request, chat_id, message_id):
         )
 
     request_data = request.data.copy()
-    has_warning = False
-    detected_words = []
+    original_content = request_data.get("content", "").strip()
 
-    if "content" in request_data:
-        moderated_content, has_warning, detected_words = moderate_message_content(
-            request_data.get("content", "")
+    if not original_content:
+        return Response(
+            {"error": "Message content cannot be empty"},
+            status=status.HTTP_400_BAD_REQUEST,
         )
-        request_data["content"] = moderated_content
 
-    partial = request.method == "PATCH"
-    serializer = MessageSerializer(message, data=request_data, partial=partial)
+    moderated_content, has_warning, detected_words = moderate_message_content(
+        original_content
+    )
+
+    request_data["content"] = moderated_content
+
+    serializer = MessageSerializer(message, data=request_data, partial=True)
 
     if serializer.is_valid():
         updated_message = serializer.save(chat=chat, sender=message.sender)
@@ -432,6 +493,12 @@ def delete_message(request, chat_id, message_id):
             status=status.HTTP_404_NOT_FOUND,
         )
 
+    if chat.status != ChatStatus.ACTIVE:
+        return Response(
+            {"error": "Chat is closed"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
     try:
         message = Message.objects.get(id=message_id, chat=chat)
     except Message.DoesNotExist:
@@ -446,9 +513,29 @@ def delete_message(request, chat_id, message_id):
             status=status.HTTP_403_FORBIDDEN,
         )
 
+    deleted_message_data = {
+        "id": message.id,
+        "chat": chat.id,
+        "sender": message.sender_id,
+    }
+
     message.delete()
+
+    channel_layer = get_channel_layer()
+    async_to_sync(channel_layer.group_send)(
+        f"chat_{chat.id}",
+        {
+            "type": "chat_message_deleted",
+            "message": deleted_message_data,
+        },
+    )
+
     return Response(
-        {"message": "Message deleted successfully"},
+        {
+            "message": "Message deleted successfully",
+            "deletedMessageId": deleted_message_data["id"],
+            "chat": chat.id,
+        },
         status=status.HTTP_200_OK,
     )
 

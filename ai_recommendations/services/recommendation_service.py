@@ -1,3 +1,5 @@
+#recommendations_services.py
+
 from ai_recommendations.services.embedding_service import (
     cosine_similarity_score,
     generate_embedding,
