@@ -1,4 +1,3 @@
-
 ##consumers
 
 import json
@@ -125,6 +124,27 @@ class ChatConsumer(AsyncWebsocketConsumer):
                         "reader_id": self.user.id,
                     }
                 )
+
+    async def chat_message_updated(self, event):
+        await self.send(
+            text_data=json.dumps(
+                {
+                    "type": "message_updated",
+                    "message": event["message"],
+                }
+            )
+        )
+
+    async def chat_message_deleted(self, event):
+        await self.send(
+            text_data=json.dumps(
+                {
+                    "type": "message_deleted",
+                    "message": event["message"],
+                    "message_id": event["message"]["id"],
+                }
+            )
+        )
 
     async def message_seen(self, event):
         await self.send(
