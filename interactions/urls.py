@@ -2,6 +2,7 @@ from django.urls import path
 
 from .views import (
     AgentOfferReactionView,
+    ClientInterestedAgentsView,
     ClientRespondToOfferReactionView,
     MyOfferReactionsView,
 )
@@ -16,6 +17,11 @@ urlpatterns = [
         "my-reactions/",
         MyOfferReactionsView.as_view(),
         name="my-offer-reactions",
+    ),
+    path(
+        "client/interested-agents/",
+        ClientInterestedAgentsView.as_view(),
+        name="client-interested-agents",
     ),
     path(
         "reactions/<int:reaction_id>/respond/",

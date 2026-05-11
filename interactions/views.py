@@ -15,7 +15,10 @@ from subscriptions.services.usage_service import (
 from chats.models import Chat, ChatStatus
 from chats.serializers import ChatSerializer
 
-from .serializers import OffreReactionSerializer
+from .serializers import (
+    ClientInterestedAgentSerializer,
+    OffreReactionSerializer,
+)
 
 
 def parse_bool(value):
@@ -120,6 +123,54 @@ class MyOfferReactionsView(APIView):
         )
 
         serializer = OffreReactionSerializer(reactions, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class ClientInterestedAgentsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if request.user.role != Role.CLIENT:
+            return Response(
+                {"detail": "Only clients can access interested agents."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        offer_id = request.query_params.get("offer_id")
+
+        reactions = (
+            OffreReaction.objects
+            .filter(
+                offre__client=request.user,
+                react=True,
+                status=OfferReactionStatus.PENDING,
+            )
+            .select_related(
+                "agent",
+                "agent__profile",
+                "agent__profile__localisation",
+                "offre",
+            )
+            .order_by("-createdAt")
+        )
+
+        if offer_id is not None and str(offer_id).strip():
+            try:
+                offer_id_value = int(offer_id)
+            except ValueError:
+                return Response(
+                    {"detail": "offer_id must be a valid integer."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            reactions = reactions.filter(offre_id=offer_id_value)
+
+        serializer = ClientInterestedAgentSerializer(
+            reactions,
+            many=True,
+            context={"request": request},
+        )
+
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 

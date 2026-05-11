@@ -29,6 +29,8 @@ class MeSerializer(serializers.ModelSerializer):
             "id",
             "email",
             "username",
+            "first_name",
+            "last_name",
             "role",
             "isEmailVerified",
             "createdAt",
@@ -62,6 +64,24 @@ class MeSerializer(serializers.ModelSerializer):
             )
 
         return False
+
+
+class MeUpdateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ["first_name", "last_name"]
+
+    def validate_first_name(self, value):
+        value = (value or "").strip()
+        if not value:
+            raise serializers.ValidationError("First name is required.")
+        return value
+
+    def validate_last_name(self, value):
+        value = (value or "").strip()
+        if not value:
+            raise serializers.ValidationError("Last name is required.")
+        return value
 
 
 class ProfileUpdateSerializer(serializers.ModelSerializer):
