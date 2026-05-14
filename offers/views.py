@@ -18,6 +18,7 @@ from .serializers import (
     ClientOfferListSerializer,
     ClientOfferUpdateSerializer,
     OfferImageSerializer,
+    OfferPublicSerializer,
 )
 
 
@@ -303,4 +304,36 @@ class ClientOfferStatusView(APIView):
             offer,
             context={"request": request},
         )
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+class AgentOfferListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if request.user.role != Role.AGENT:
+            return Response(
+                {"detail": "Only agents can browse offers."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        reacted_offer_ids = request.user.offer_reactions.values_list(
+            "offre_id",
+            flat=True,
+        )
+
+        offers = (
+            Offre.objects.filter(status=OffreStatut.OPEN)
+            .exclude(client=request.user)
+            .exclude(id__in=reacted_offer_ids)
+            .select_related("localisation", "category", "client")
+            .prefetch_related("images")
+            .order_by("-createdAt")
+        )
+
+        serializer = OfferPublicSerializer(
+            offers,
+            many=True,
+            context={"request": request},
+        )
+
         return Response(serializer.data, status=status.HTTP_200_OK)

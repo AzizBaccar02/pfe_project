@@ -1,6 +1,7 @@
 from django.urls import path
 
 from .views import (
+    AgentOfferListView,
     ClientOfferDetailView,
     ClientOfferImagesView,
     ClientOfferListCreateView,
@@ -27,5 +28,10 @@ urlpatterns = [
         "client/offers/<int:offer_id>/status/",
         ClientOfferStatusView.as_view(),
         name="client-offer-status",
+    ),
+    path(
+        "agent/offers/",
+        AgentOfferListView.as_view(),
+        name="agent-offer-list",
     ),
 ]

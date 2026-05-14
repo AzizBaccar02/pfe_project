@@ -57,6 +57,11 @@ class OfferPublicSerializer(serializers.ModelSerializer):
     images = OfferImageSerializer(many=True, read_only=True)
     category_name = serializers.SerializerMethodField()
     city = serializers.CharField(source="localisation.city", read_only=True)
+    address = serializers.CharField(source="localisation.address", read_only=True)
+    postalCode = serializers.CharField(source="localisation.postalCode", read_only=True)
+    clientName = serializers.SerializerMethodField()
+    skills = serializers.SerializerMethodField()
+    highlights = serializers.SerializerMethodField()
 
     class Meta:
         model = Offre
@@ -71,11 +76,50 @@ class OfferPublicSerializer(serializers.ModelSerializer):
             "category_name",
             "localisation",
             "city",
+            "address",
+            "postalCode",
+            "clientName",
             "images",
+            "skills",
+            "highlights",
         ]
 
     def get_category_name(self, obj):
         return obj.category.name if obj.category else ""
+
+    def get_clientName(self, obj):
+        first_name = (obj.client.first_name or "").strip()
+        last_name = (obj.client.last_name or "").strip()
+
+        full_name = f"{first_name} {last_name}".strip()
+
+        if full_name:
+            return full_name
+
+        if obj.client.username:
+            return obj.client.username
+
+        return obj.client.email
+
+    def get_skills(self, obj):
+        if obj.category and obj.category.name:
+            return [obj.category.name]
+
+        return []
+
+    def get_highlights(self, obj):
+        highlights = []
+
+        if obj.budget:
+            highlights.append(f"Budget: {obj.budget} DT")
+
+        if obj.localisation and obj.localisation.city:
+            highlights.append(obj.localisation.city)
+
+        if obj.category and obj.category.name:
+            highlights.append(obj.category.name)
+
+        return highlights
 
 
 class ClientOfferCreateSerializer(serializers.ModelSerializer):
