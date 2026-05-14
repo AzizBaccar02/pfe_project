@@ -36,6 +36,17 @@ class PlanListView(APIView):
 class MySubscriptionView(APIView):
     permission_classes = [IsAuthenticated]
 
+    def _get_free_usage_data(self, user):
+        free_usage_limit = getattr(user, "freeUsageLimit", 0)
+        remaining_free_usage_count = getattr(user, "remainingFreeUsageCount", 0)
+        used_free_usage_count = getattr(user, "usedFreeUsageCount", 0)
+
+        return {
+            "freeUsageLimit": free_usage_limit,
+            "remainingFreeUsageCount": remaining_free_usage_count,
+            "usedFreeUsageCount": used_free_usage_count,
+        }
+
     def get(self, request):
         subscription = (
             Subscription.objects
@@ -44,26 +55,34 @@ class MySubscriptionView(APIView):
             .first()
         )
 
+        free_usage = self._get_free_usage_data(request.user)
+
         if not subscription:
             return Response(
                 {
                     "hasActiveSubscription": False,
+                    "activeUsageSource": "FREE",
                     "subscription": None,
+                    "freeUsage": free_usage,
                     "message": "No subscription found for this user.",
                 },
                 status=status.HTTP_200_OK,
             )
 
         serializer = SubscriptionSerializer(subscription)
+        has_active_subscription = subscription.has_active_subscription
 
         return Response(
             {
-                "hasActiveSubscription": subscription.has_active_subscription,
+                "hasActiveSubscription": has_active_subscription,
+                "activeUsageSource": (
+                    "SUBSCRIPTION" if has_active_subscription else "FREE"
+                ),
                 "subscription": serializer.data,
+                "freeUsage": free_usage,
             },
             status=status.HTTP_200_OK,
         )
-
 
 class CreateCheckoutSessionView(APIView):
     permission_classes = [IsAuthenticated]
