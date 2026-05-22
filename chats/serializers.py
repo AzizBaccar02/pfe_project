@@ -1,6 +1,7 @@
-##chats/serializers.py
+# chats/serializers.py
 
 from rest_framework import serializers
+
 from .models import Chat, Message
 
 
@@ -14,8 +15,21 @@ class ChatSerializer(serializers.ModelSerializer):
             "client",
             "agent",
             "offreReaction",
+            "clientArchived",
+            "agentArchived",
+            "clientMuted",
+            "agentMuted",
+            "clientCustomTitle",
+            "agentCustomTitle",
+            "blockedBy",
+            "blockedAt",
         ]
-        read_only_fields = ["id", "createdAt"]
+        read_only_fields = [
+            "id",
+            "createdAt",
+            "blockedBy",
+            "blockedAt",
+        ]
 
 
 class MessageSerializer(serializers.ModelSerializer):

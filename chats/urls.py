@@ -1,6 +1,9 @@
+# chats/urls.py
+
 from django.urls import path
 
 from .views import (
+    block_chat,
     close_chat,
     create_chat,
     create_message,
@@ -11,6 +14,7 @@ from .views import (
     list_chats,
     mark_all_messages_as_read,
     update_chat,
+    update_chat_preferences,
     update_message,
 )
 
@@ -21,6 +25,14 @@ urlpatterns = [
     path("chats/<int:chat_id>/", get_chat_by_id, name="get-chat-by-id"),
     path("chats/<int:chat_id>/update/", update_chat, name="update-chat"),
     path("chats/<int:chat_id>/delete/", delete_chat, name="delete-chat"),
+
+    # Chat user actions
+    path(
+        "chats/<int:chat_id>/preferences/",
+        update_chat_preferences,
+        name="update-chat-preferences",
+    ),
+    path("chats/<int:chat_id>/block/", block_chat, name="block-chat"),
 
     # Message CRUD
     path(
