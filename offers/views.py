@@ -60,7 +60,7 @@ class ClientOfferListCreateView(APIView):
 
         if serializer.is_valid():
             with transaction.atomic():
-                consume_subscription_usage(
+                usage_result = consume_subscription_usage(
                     request.user,
                     SubscriptionUsageAction.CREATE_OFFER,
                 )
@@ -71,8 +71,20 @@ class ClientOfferListCreateView(APIView):
                 offer,
                 context={"request": request},
             )
+            response_data = detail_serializer.data
+            response_data["usage"] = {
+                "source": usage_result.get("source"),
+                "remainingFreeUsageCount": usage_result.get(
+                    "remainingFreeUsageCount"
+                ),
+                "usedFreeUsageCount": usage_result.get("usedFreeUsageCount"),
+                "remainingSubscriptionUsageCount": usage_result.get(
+                    "remainingSubscriptionUsageCount"
+                ),
+            }
+
             return Response(
-                detail_serializer.data,
+                response_data,
                 status=status.HTTP_201_CREATED,
             )
 

@@ -50,8 +50,77 @@ def _expire_subscription_if_needed(subscription):
     return False
 
 
+def _consume_free_usage(locked_user):
+    if locked_user.remainingFreeUsageCount <= 0:
+        return None
+
+    locked_user.remainingFreeUsageCount -= 1
+    locked_user.usedFreeUsageCount += 1
+    locked_user.save(
+        update_fields=[
+            "remainingFreeUsageCount",
+            "usedFreeUsageCount",
+        ]
+    )
+
+    return {
+        "source": "free_usage",
+        "subscription": None,
+        "remainingFreeUsageCount": locked_user.remainingFreeUsageCount,
+        "usedFreeUsageCount": locked_user.usedFreeUsageCount,
+    }
+
+
+def _consume_subscription_quota(subscription):
+    plan = subscription.plan
+
+    if not plan:
+        raise PermissionDenied("Subscription plan not found.")
+
+    if plan.planType == PlanType.DATE:
+        return {
+            "source": "subscription_date",
+            "subscription": subscription,
+            "remainingFreeUsageCount": None,
+            "usedFreeUsageCount": None,
+        }
+
+    if plan.planType == PlanType.USAGE:
+        if subscription.remainingUsageCount <= 0:
+            return None
+
+        subscription.remainingUsageCount -= 1
+        subscription.usedUsageCount += 1
+        subscription.save(
+            update_fields=[
+                "remainingUsageCount",
+                "usedUsageCount",
+                "updatedAt",
+            ]
+        )
+
+        return {
+            "source": "subscription_usage",
+            "subscription": subscription,
+            "remainingFreeUsageCount": None,
+            "usedFreeUsageCount": None,
+            "remainingSubscriptionUsageCount": subscription.remainingUsageCount,
+            "usedSubscriptionUsageCount": subscription.usedUsageCount,
+        }
+
+    return None
+
+
 @transaction.atomic
 def consume_subscription_usage(user, action):
+    """
+    Consume one usage unit for an action.
+
+    Priority:
+    1. Active paid subscription (USAGE quota or unlimited DATE plan)
+    2. Free tier counters on the user row
+    3. PermissionDenied
+    """
     User = get_user_model()
 
     locked_user = (
@@ -76,11 +145,9 @@ def consume_subscription_usage(user, action):
         was_expired = _expire_subscription_if_needed(subscription)
 
         if was_expired:
-            raise PermissionDenied(
-                "Your subscription has expired. Please renew your subscription."
-            )
+            subscription.refresh_from_db(fields=["status", "isActive", "updatedAt"])
 
-        if subscription.status == SubscriptionStatus.ACTIVE and subscription.isActive:
+        if subscription.has_active_subscription:
             plan = subscription.plan
 
             if not plan:
@@ -91,47 +158,19 @@ def consume_subscription_usage(user, action):
                     "This subscription plan does not match your role."
                 )
 
-            if plan.planType == PlanType.DATE:
-                return {
-                    "source": "subscription_date",
-                    "subscription": subscription,
-                }
+            usage_result = _consume_subscription_quota(subscription)
 
-            if plan.planType == PlanType.USAGE:
-                if subscription.remainingUsageCount <= 0:
-                    raise PermissionDenied(
-                        "You have no remaining subscription uses. Please renew your subscription."
-                    )
-
-                subscription.remainingUsageCount -= 1
-                subscription.usedUsageCount += 1
-                subscription.save(
-                    update_fields=[
-                        "remainingUsageCount",
-                        "usedUsageCount",
-                        "updatedAt",
-                    ]
+            if usage_result is not None:
+                usage_result["remainingFreeUsageCount"] = (
+                    locked_user.remainingFreeUsageCount
                 )
+                usage_result["usedFreeUsageCount"] = locked_user.usedFreeUsageCount
+                return usage_result
 
-                return {
-                    "source": "subscription_usage",
-                    "subscription": subscription,
-                }
+    free_usage_result = _consume_free_usage(locked_user)
 
-    if locked_user.remainingFreeUsageCount > 0:
-        locked_user.remainingFreeUsageCount -= 1
-        locked_user.usedFreeUsageCount += 1
-        locked_user.save(
-            update_fields=[
-                "remainingFreeUsageCount",
-                "usedFreeUsageCount",
-            ]
-        )
-
-        return {
-            "source": "free_usage",
-            "subscription": None,
-        }
+    if free_usage_result is not None:
+        return free_usage_result
 
     raise PermissionDenied(
         "You have used all your free tries. Please subscribe to continue."
