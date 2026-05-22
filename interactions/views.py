@@ -14,6 +14,7 @@ from subscriptions.services.usage_service import (
 )
 from chats.models import Chat, ChatStatus
 from chats.serializers import ChatSerializer
+from notifications.views import send_notification
 
 from .serializers import (
     ClientInterestedAgentSerializer,
@@ -97,6 +98,25 @@ class AgentOfferReactionView(APIView):
                 offre=offer,
                 react=react_value,
                 status=reaction_status,
+            )
+
+        # Notify the client that an agent liked their offer
+        if react_value is True:
+            agent_name = request.user.get_full_name() or request.user.username
+            send_notification(
+                title=f"{agent_name} liked your offer",
+                body=f'{agent_name} is interested in "{offer.title}".',
+                notification_type="AGENT_LIKED_OFFER",
+                user_id=offer.client_id,
+                data={
+                    "action":         "agent_liked_offer",
+                    "offer_id":       offer.id,
+                    "offer_title":    offer.title,
+                    "agent_id":       request.user.id,
+                    "agent_name":     agent_name,
+                    "agent_email":    request.user.email,
+                    "interaction_id": reaction.id,
+                },
             )
 
         return Response(
@@ -258,6 +278,42 @@ class ClientRespondToOfferReactionView(APIView):
 
                 if update_fields:
                     chat.save(update_fields=update_fields)
+
+        # Notify the agent of the client's decision
+        client_name = request.user.get_full_name() or request.user.username
+        offer = reaction.offre
+
+        if accept_value is True:
+            send_notification(
+                title="Your interest was accepted!",
+                body=f'{client_name} accepted your interest in "{offer.title}".',
+                notification_type="MATCH_CREATED",
+                user_id=reaction.agent_id,
+                data={
+                    "action":         "client_accepted",
+                    "offer_id":       offer.id,
+                    "offer_title":    offer.title,
+                    "client_id":      request.user.id,
+                    "client_name":    client_name,
+                    "interaction_id": reaction.id,
+                    "chat_id":        chat.id if chat else None,
+                },
+            )
+        else:
+            send_notification(
+                title="Your interest was declined",
+                body=f'{client_name} declined your interest in "{offer.title}".',
+                notification_type="CLIENT_REJECTED",
+                user_id=reaction.agent_id,
+                data={
+                    "action":         "client_rejected",
+                    "offer_id":       offer.id,
+                    "offer_title":    offer.title,
+                    "client_id":      request.user.id,
+                    "client_name":    client_name,
+                    "interaction_id": reaction.id,
+                },
+            )
 
         reaction_data = OffreReactionSerializer(reaction).data
 
