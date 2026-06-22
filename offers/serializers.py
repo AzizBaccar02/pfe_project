@@ -4,6 +4,25 @@ from cores.models import Localisation
 from offers.models import Category, Images, Offre
 
 
+class CategorySerializer(serializers.ModelSerializer):
+    description = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default="",
+    )
+
+    class Meta:
+        model = Category
+        fields = ["id", "name", "description"]
+        read_only_fields = ["id"]
+
+    def validate_name(self, value):
+        cleaned = str(value).strip()
+        if not cleaned:
+            raise serializers.ValidationError("Category name is required.")
+        return cleaned
+
+
 ALLOWED_TUNISIA_CITIES = [
     "Tunis",
     "Ariana",
@@ -220,11 +239,14 @@ class ClientOfferCreateSerializer(serializers.ModelSerializer):
         category = validated_data.pop("category", None)
 
         if category_name:
-            category, _ = Category.objects.get_or_create(
+            existing = Category.objects.filter(name__iexact=category_name).first()
+            if existing:
+                return existing
+
+            return Category.objects.create(
                 name=category_name,
-                defaults={"description": ""},
+                description="",
             )
-            return category
 
         return category
 
@@ -386,11 +408,14 @@ class ClientOfferUpdateSerializer(serializers.ModelSerializer):
         category_name = str(validated_data.pop("categoryName", "")).strip()
 
         if category_name:
-            category, _ = Category.objects.get_or_create(
-                name=category_name,
-                defaults={"description": ""},
-            )
-            instance.category = category
+            existing = Category.objects.filter(name__iexact=category_name).first()
+            if existing:
+                instance.category = existing
+            else:
+                instance.category = Category.objects.create(
+                    name=category_name,
+                    description="",
+                )
         elif "category" in validated_data:
             instance.category = validated_data.pop("category")
 

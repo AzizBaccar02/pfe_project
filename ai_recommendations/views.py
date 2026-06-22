@@ -1,3 +1,5 @@
+#C:\Users\Lenovo\django_project\pfe_project2\pfe_project\ai_recommendations\views.py
+
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -7,6 +9,9 @@ from offers.models import Offre, OffreStatut
 from users.models import Role
 from ai_recommendations.serializers import RecommendedOfferSerializer
 from ai_recommendations.services.recommendation_service import (
+    SORT_LOCATION_SKILLS,
+    SORT_MATCH_SCORE,
+    get_agent_city,
     recommend_offers_for_agent,
 )
 
@@ -50,12 +55,17 @@ class AgentRecommendedOffersView(APIView):
                 "client__profile__localisation",
             )
             .order_by("-createdAt")
-            .distinct()
+            .distinct()[:60]
         )
+
+        sort_mode = request.query_params.get("sort", SORT_LOCATION_SKILLS)
+        if sort_mode not in (SORT_LOCATION_SKILLS, SORT_MATCH_SCORE):
+            sort_mode = SORT_LOCATION_SKILLS
 
         recommendations = recommend_offers_for_agent(
             agent=agent,
             offers=offers,
+            sort_mode=sort_mode,
         )
 
         limit = request.query_params.get("limit", 20)
@@ -106,8 +116,12 @@ class AgentRecommendedOffersView(APIView):
                     "clientCity": client_location.city if client_location else "",
                     "createdAt": offer.createdAt,
                     "matchScore": item["matchScore"],
+                    "skillsScore": item["skillsScore"],
                     "semanticScore": item["semanticScore"],
+                    "keywordSkillsScore": item.get("keywordSkillsScore", 0),
                     "locationBoost": item["locationBoost"],
+                    "locationTier": item["locationTier"],
+                    "locationLabel": item["locationLabel"],
                     "budgetBoost": item["budgetBoost"],
                     "clientRatingBoost": item["clientRatingBoost"],
                     "matchLevel": item["matchLevel"],
@@ -117,4 +131,12 @@ class AgentRecommendedOffersView(APIView):
 
         serializer = RecommendedOfferSerializer(data, many=True)
 
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response(
+            {
+                "agentCity": get_agent_city(agent),
+                "sortBy": sort_mode,
+                "count": len(serializer.data),
+                "results": serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )

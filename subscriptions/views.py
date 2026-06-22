@@ -1,4 +1,4 @@
-from datetime import datetime, timezone as datetime_timezone
+#subscriptions\views.py
 
 import stripe
 
@@ -11,12 +11,24 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import Plan, PlanType, Subscription, SubscriptionStatus
+from .models import Plan, Subscription, SubscriptionStatus
 from .serializers import PlanSerializer, SubscriptionSerializer
+from .services.checkout_sync import (
+    complete_checkout_session,
+    sync_subscription_from_stripe,
+    sync_subscription_for_user,
+)
+from .services.subscription_repository import (
+    create_pending_subscription,
+    get_current_subscription,
+    get_stripe_customer_id,
+    get_subscription_history,
+)
 from .services.stripe_service import (
     create_checkout_session,
     create_customer_portal_session,
 )
+from .services.usage_service import resolve_create_offer_access
 
 
 class PlanListView(APIView):
@@ -48,13 +60,8 @@ class MySubscriptionView(APIView):
         }
 
     def get(self, request):
-        subscription = (
-            Subscription.objects
-            .filter(user=request.user)
-            .select_related("plan")
-            .first()
-        )
-
+        subscription = get_current_subscription(request.user)
+        history = get_subscription_history(request.user)
         free_usage = self._get_free_usage_data(request.user)
 
         if not subscription:
@@ -62,7 +69,9 @@ class MySubscriptionView(APIView):
                 {
                     "hasActiveSubscription": False,
                     "activeUsageSource": "FREE",
+                    "canCreateOffer": free_usage["remainingFreeUsageCount"] > 0,
                     "subscription": None,
+                    "history": [],
                     "freeUsage": free_usage,
                     "message": "No subscription found for this user.",
                 },
@@ -70,7 +79,16 @@ class MySubscriptionView(APIView):
             )
 
         serializer = SubscriptionSerializer(subscription)
+        history_serializer = SubscriptionSerializer(history, many=True)
         has_active_subscription = subscription.has_active_subscription
+        free_remaining = free_usage["remainingFreeUsageCount"]
+        can_create_offer, denial_message = resolve_create_offer_access(
+            request.user,
+            subscription,
+            free_remaining,
+        )
+
+        message = None if can_create_offer else denial_message
 
         return Response(
             {
@@ -78,8 +96,11 @@ class MySubscriptionView(APIView):
                 "activeUsageSource": (
                     "SUBSCRIPTION" if has_active_subscription else "FREE"
                 ),
+                "canCreateOffer": can_create_offer,
                 "subscription": serializer.data,
+                "history": history_serializer.data,
                 "freeUsage": free_usage,
+                "message": message,
             },
             status=status.HTTP_200_OK,
         )
@@ -121,15 +142,23 @@ class CreateCheckoutSessionView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        subscription, _ = Subscription.objects.update_or_create(
-            user=request.user,
-            defaults={
-                "plan": plan,
-                "status": SubscriptionStatus.INCOMPLETE,
-                "isActive": False,
-                "stripeCheckoutSessionId": checkout_session.id,
-            },
-        )
+        try:
+            subscription = create_pending_subscription(
+                user=request.user,
+                plan=plan,
+                checkout_session_id=checkout_session.id,
+                stripe_customer_id=get_stripe_customer_id(request.user),
+            )
+        except Exception as e:
+            return Response(
+                {
+                    "detail": (
+                        "Checkout started in Stripe but we could not save a "
+                        f"pending subscription row: {e}"
+                    ),
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
         return Response(
             {
@@ -145,12 +174,7 @@ class CreateCustomerPortalSessionView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        subscription = (
-            Subscription.objects
-            .filter(user=request.user)
-            .select_related("plan")
-            .first()
-        )
+        subscription = get_current_subscription(request.user)
 
         if not subscription:
             return Response(
@@ -158,7 +182,8 @@ class CreateCustomerPortalSessionView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        if not subscription.stripeCustomerId:
+        stripe_customer_id = get_stripe_customer_id(request.user)
+        if not stripe_customer_id and not subscription.stripeCustomerId:
             return Response(
                 {"detail": "Stripe customer ID not found for this subscription."},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -166,7 +191,7 @@ class CreateCustomerPortalSessionView(APIView):
 
         try:
             portal_session = create_customer_portal_session(
-                customer_id=subscription.stripeCustomerId,
+                customer_id=stripe_customer_id or subscription.stripeCustomerId,
             )
         except Exception as e:
             return Response(
@@ -179,6 +204,109 @@ class CreateCustomerPortalSessionView(APIView):
                 "portalUrl": portal_session.url,
             },
             status=status.HTTP_200_OK,
+        )
+
+
+class _SubscriptionActivationResponseMixin:
+    def _activation_response(self, request, subscription, *, message):
+        subscription.sync_expired_state()
+        subscription.refresh_from_db()
+
+        free_usage = MySubscriptionView()._get_free_usage_data(request.user)
+        serializer = SubscriptionSerializer(subscription)
+        has_active_subscription = subscription.has_active_subscription
+
+        return Response(
+            {
+                "hasActiveSubscription": has_active_subscription,
+                "activeUsageSource": (
+                    "SUBSCRIPTION" if has_active_subscription else "FREE"
+                ),
+                "subscription": serializer.data,
+                "freeUsage": free_usage,
+                "canUseSubscription": subscription.can_use_subscription,
+                "message": message,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class ConfirmCheckoutSessionView(_SubscriptionActivationResponseMixin, APIView):
+    """
+    Activate subscription after Stripe Checkout when webhooks cannot reach
+    localhost (typical in local development).
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        session_id = (request.data.get("sessionId") or "").strip() or None
+
+        try:
+            subscription = sync_subscription_for_user(
+                request.user,
+                session_id=session_id,
+            )
+        except ValueError as e:
+            return Response(
+                {"detail": str(e)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except Exception as e:
+            return Response(
+                {"detail": str(e)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not subscription.can_use_subscription:
+            return Response(
+                {
+                    "detail": (
+                        "Payment was found but your subscription is not usable yet. "
+                        "Please try again in a moment."
+                    ),
+                    "canUseSubscription": False,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return self._activation_response(
+            request,
+            subscription,
+            message="Subscription activated successfully.",
+        )
+
+
+class SyncSubscriptionView(_SubscriptionActivationResponseMixin, APIView):
+    """Pull subscription state from Stripe for the logged-in user."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        try:
+            subscription = sync_subscription_for_user(request.user)
+        except ValueError as e:
+            return Response(
+                {"detail": str(e)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except Exception as e:
+            return Response(
+                {"detail": str(e)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if subscription.can_use_subscription:
+            return self._activation_response(
+                request,
+                subscription,
+                message="Subscription synced successfully.",
+            )
+
+        return self._activation_response(
+            request,
+            subscription,
+            message="Subscription record updated.",
         )
 
 
@@ -216,157 +344,6 @@ def _stripe_value(obj, key, default=None):
         return default
 
 
-def _stripe_timestamp_to_datetime(timestamp):
-    if not timestamp:
-        return None
-
-    try:
-        return datetime.fromtimestamp(timestamp, tz=datetime_timezone.utc)
-    except Exception:
-        return None
-
-
-def _map_stripe_subscription_status(stripe_status):
-    status_map = {
-        "incomplete": SubscriptionStatus.INCOMPLETE,
-        "active": SubscriptionStatus.ACTIVE,
-        "trialing": SubscriptionStatus.ACTIVE,
-        "past_due": SubscriptionStatus.PAST_DUE,
-        "canceled": SubscriptionStatus.CANCELED,
-        "unpaid": SubscriptionStatus.UNPAID,
-        "incomplete_expired": SubscriptionStatus.EXPIRED,
-    }
-
-    return status_map.get(stripe_status, SubscriptionStatus.INCOMPLETE)
-
-
-def _get_subscription_period_dates(stripe_subscription):
-    top_level_start = _stripe_value(stripe_subscription, "current_period_start")
-    top_level_end = _stripe_value(stripe_subscription, "current_period_end")
-
-    if top_level_start and top_level_end:
-        return top_level_start, top_level_end
-
-    items = _stripe_value(stripe_subscription, "items", {}) or {}
-    item_data = _stripe_value(items, "data", []) or []
-
-    period_starts = []
-    period_ends = []
-
-    for item in item_data:
-        item_start = _stripe_value(item, "current_period_start")
-        item_end = _stripe_value(item, "current_period_end")
-
-        if item_start:
-            period_starts.append(item_start)
-
-        if item_end:
-            period_ends.append(item_end)
-
-    if period_starts and period_ends:
-        return min(period_starts), max(period_ends)
-
-    return None, None
-
-
-def _apply_plan_usage_data(subscription_data, plan, initialize_usage=False):
-    if not plan:
-        return subscription_data
-
-    if plan.planType == PlanType.USAGE:
-        if initialize_usage:
-            subscription_data["usageLimit"] = plan.usageLimit
-            subscription_data["remainingUsageCount"] = plan.usageLimit
-            subscription_data["usedUsageCount"] = 0
-
-    elif plan.planType == PlanType.DATE:
-        subscription_data["usageLimit"] = 0
-        subscription_data["remainingUsageCount"] = 0
-        subscription_data["usedUsageCount"] = 0
-
-    return subscription_data
-
-
-def _sync_subscription_from_stripe(stripe_subscription):
-    stripe_subscription_id = _stripe_value(stripe_subscription, "id")
-    metadata = _stripe_value(stripe_subscription, "metadata", {}) or {}
-
-    user_id = _stripe_value(metadata, "user_id")
-    plan_id = _stripe_value(metadata, "plan_id")
-
-    existing_subscription = None
-
-    if stripe_subscription_id:
-        existing_subscription = (
-            Subscription.objects
-            .filter(stripeSubscriptionId=stripe_subscription_id)
-            .select_related("plan", "user")
-            .first()
-        )
-
-    if not user_id and existing_subscription:
-        user_id = existing_subscription.user_id
-
-    if not plan_id and existing_subscription and existing_subscription.plan_id:
-        plan_id = existing_subscription.plan_id
-
-    if not user_id:
-        print("Stripe sync skipped: user_id not found.")
-        return
-
-    plan = None
-    if plan_id:
-        plan = Plan.objects.filter(id=plan_id).first()
-
-    stripe_status = _stripe_value(stripe_subscription, "status")
-    local_status = _map_stripe_subscription_status(stripe_status)
-
-    period_start, period_end = _get_subscription_period_dates(stripe_subscription)
-
-    subscription_data = {
-        "status": local_status,
-        "isActive": local_status == SubscriptionStatus.ACTIVE,
-        "stripeCustomerId": _stripe_value(stripe_subscription, "customer"),
-        "stripeSubscriptionId": stripe_subscription_id,
-        "startDate": _stripe_timestamp_to_datetime(period_start),
-        "endDate": _stripe_timestamp_to_datetime(period_end),
-        "cancelAtPeriodEnd": _stripe_value(
-            stripe_subscription,
-            "cancel_at_period_end",
-            False,
-        ),
-    }
-
-    if plan_id:
-        subscription_data["plan_id"] = plan_id
-
-    should_initialize_usage = (
-        local_status == SubscriptionStatus.ACTIVE
-        and plan is not None
-        and plan.planType == PlanType.USAGE
-        and (
-            not existing_subscription
-            or existing_subscription.status != SubscriptionStatus.ACTIVE
-            or (
-                existing_subscription.usageLimit == 0
-                and existing_subscription.remainingUsageCount == 0
-                and existing_subscription.usedUsageCount == 0
-            )
-        )
-    )
-
-    subscription_data = _apply_plan_usage_data(
-        subscription_data=subscription_data,
-        plan=plan,
-        initialize_usage=should_initialize_usage,
-    )
-
-    Subscription.objects.update_or_create(
-        user_id=user_id,
-        defaults=subscription_data,
-    )
-
-
 @csrf_exempt
 def stripe_webhook_view(request):
     payload = request.body
@@ -395,113 +372,10 @@ def stripe_webhook_view(request):
         data_object = _stripe_value(data, "object", {})
 
         if event_type == "checkout.session.completed":
-            checkout_session = data_object
-
-            checkout_session_id = _stripe_value(checkout_session, "id")
-            metadata = _stripe_value(checkout_session, "metadata", {}) or {}
-
-            user_id = _stripe_value(metadata, "user_id")
-            plan_id = _stripe_value(metadata, "plan_id")
-
-            stripe_subscription_id = _stripe_value(checkout_session, "subscription")
-            stripe_customer_id = _stripe_value(checkout_session, "customer")
-            transaction_id = _stripe_value(checkout_session, "payment_intent")
-
-            existing_subscription = None
-
-            if checkout_session_id:
-                existing_subscription = (
-                    Subscription.objects
-                    .filter(stripeCheckoutSessionId=checkout_session_id)
-                    .select_related("plan", "user")
-                    .first()
-                )
-
-            if not user_id and existing_subscription:
-                user_id = existing_subscription.user_id
-
-            if not plan_id and existing_subscription and existing_subscription.plan_id:
-                plan_id = existing_subscription.plan_id
-
-            if not user_id:
-                print("Stripe webhook skipped: user_id not found.")
-                return JsonResponse({"received": True})
-
-            plan = None
-            if plan_id:
-                plan = Plan.objects.filter(id=plan_id).first()
-
-            local_status = SubscriptionStatus.ACTIVE
-            start_date = None
-            end_date = None
-            stripe_subscription = None
-
-            if stripe_subscription_id:
-                try:
-                    stripe_subscription = stripe.Subscription.retrieve(
-                        stripe_subscription_id,
-                        expand=["items.data.price"],
-                    )
-
-                    stripe_status = _stripe_value(stripe_subscription, "status")
-                    local_status = _map_stripe_subscription_status(stripe_status)
-
-                    period_start, period_end = _get_subscription_period_dates(
-                        stripe_subscription
-                    )
-
-                    start_date = _stripe_timestamp_to_datetime(period_start)
-                    end_date = _stripe_timestamp_to_datetime(period_end)
-
-                    if not stripe_customer_id:
-                        stripe_customer_id = _stripe_value(
-                            stripe_subscription,
-                            "customer",
-                        )
-
-                    print("Stripe checkout completed.")
-                    print("Checkout session:", checkout_session_id)
-                    print("Stripe subscription:", stripe_subscription_id)
-                    print("Start date:", start_date)
-                    print("End date:", end_date)
-
-                except Exception as stripe_error:
-                    print("Stripe subscription retrieve error:", stripe_error)
-
-            subscription_data = {
-                "status": local_status,
-                "isActive": local_status == SubscriptionStatus.ACTIVE,
-                "stripeCustomerId": stripe_customer_id,
-                "stripeSubscriptionId": stripe_subscription_id,
-                "stripeCheckoutSessionId": checkout_session_id,
-                "transactionId": transaction_id,
-            }
-
-            if plan_id:
-                subscription_data["plan_id"] = plan_id
-
-            if start_date:
-                subscription_data["startDate"] = start_date
-
-            if end_date:
-                subscription_data["endDate"] = end_date
-
-            subscription_data = _apply_plan_usage_data(
-                subscription_data=subscription_data,
-                plan=plan,
-                initialize_usage=True,
-            )
-
-            Subscription.objects.update_or_create(
-                user_id=user_id,
-                defaults=subscription_data,
-            )
-
-            if stripe_subscription:
-                try:
-                    _sync_subscription_from_stripe(stripe_subscription)
-                except Exception as sync_error:
-                    print("Stripe subscription sync error:", sync_error)
+            try:
+                complete_checkout_session(data_object)
+            except Exception as sync_error:
+                print("Stripe checkout sync error:", sync_error)
 
         elif event_type in [
             "customer.subscription.created",
@@ -509,7 +383,7 @@ def stripe_webhook_view(request):
             "customer.subscription.deleted",
         ]:
             try:
-                _sync_subscription_from_stripe(data_object)
+                sync_subscription_from_stripe(data_object)
             except Exception as sync_error:
                 print("Stripe subscription sync error:", sync_error)
 
@@ -524,7 +398,7 @@ def stripe_webhook_view(request):
                         expand=["items.data.price"],
                     )
 
-                    _sync_subscription_from_stripe(stripe_subscription)
+                    sync_subscription_from_stripe(stripe_subscription)
 
                     if transaction_id:
                         Subscription.objects.filter(

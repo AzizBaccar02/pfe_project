@@ -1,12 +1,15 @@
+#subscriptions\services\usage_service.py
+
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied
 
-from subscriptions.models import (
-    PlanType,
-    Subscription,
-    SubscriptionStatus,
+from subscriptions.models import PlanType, Subscription, SubscriptionStatus
+from subscriptions.services.subscription_repository import (
+    get_current_subscription,
+    subscription_blocks_free_tier,
+    user_blocked_from_free_tier,
 )
 from users.models import Role
 
@@ -26,28 +29,60 @@ def _expire_subscription_if_needed(subscription):
     if not subscription:
         return False
 
-    plan = subscription.plan
+    return subscription.sync_expired_state(save=True)
+
+
+def resolve_create_offer_access(user, subscription, free_usage_remaining):
+    """
+    Shared rules for API responses and offer creation enforcement.
+    Returns (allowed, message).
+    """
+    if subscription:
+        subscription.sync_expired_state()
+        subscription.refresh_from_db()
+
+        if subscription.has_active_subscription:
+            plan = subscription.plan
+            if (
+                plan
+                and plan.planType == PlanType.USAGE
+                and subscription.remainingUsageCount <= 0
+            ):
+                return False, _inactive_subscription_message(subscription)
+            return True, None
+
+        if subscription_blocks_free_tier(subscription):
+            return False, _inactive_subscription_message(subscription)
+
+    if user_blocked_from_free_tier(user):
+        return False, "Your subscription is not active. Please renew to continue."
+
+    if free_usage_remaining <= 0:
+        return False, (
+            "You have used all your free tries. Please subscribe to continue."
+        )
+
+    return True, None
+
+
+def _inactive_subscription_message(subscription):
+    if not subscription.is_within_billing_window():
+        if subscription.startDate:
+            now = timezone.now()
+            start_date = subscription._aware_datetime(subscription.startDate)
+            if start_date and now < start_date:
+                return "Your subscription has not started yet."
+
+        return "Your subscription has expired. Please renew to continue."
 
     if (
-        subscription.status == SubscriptionStatus.ACTIVE
-        and subscription.isActive
-        and plan
-        and plan.planType == PlanType.DATE
-        and subscription.endDate
-        and timezone.now() > subscription.endDate
+        subscription.plan
+        and subscription.plan.planType == PlanType.USAGE
+        and subscription.remainingUsageCount <= 0
     ):
-        subscription.status = SubscriptionStatus.EXPIRED
-        subscription.isActive = False
-        subscription.save(
-            update_fields=[
-                "status",
-                "isActive",
-                "updatedAt",
-            ]
-        )
-        return True
+        return "You have reached your subscription usage limit. Please renew to continue."
 
-    return False
+    return "Your subscription is not active. Please renew to continue."
 
 
 def _consume_free_usage(locked_user):
@@ -134,18 +169,29 @@ def consume_subscription_usage(user, action):
     if required_role and locked_user.role != required_role:
         raise PermissionDenied("Your role is not allowed to perform this action.")
 
-    subscription = (
-        Subscription.objects
-        .select_for_update()
-        .filter(user=locked_user)
-        .first()
-    )
+    current = get_current_subscription(locked_user)
+    subscription = None
+    if current is not None:
+        subscription = (
+            Subscription.objects
+            .select_for_update(of=("self",))
+            .select_related("plan")
+            .filter(pk=current.pk)
+            .first()
+        )
 
     if subscription:
-        was_expired = _expire_subscription_if_needed(subscription)
+        _expire_subscription_if_needed(subscription)
+        subscription.refresh_from_db()
 
-        if was_expired:
-            subscription.refresh_from_db(fields=["status", "isActive", "updatedAt"])
+        allowed, denial_message = resolve_create_offer_access(
+            locked_user,
+            subscription,
+            locked_user.remainingFreeUsageCount,
+        )
+
+        if not allowed:
+            raise PermissionDenied(denial_message)
 
         if subscription.has_active_subscription:
             plan = subscription.plan
@@ -166,6 +212,8 @@ def consume_subscription_usage(user, action):
                 )
                 usage_result["usedFreeUsageCount"] = locked_user.usedFreeUsageCount
                 return usage_result
+
+            raise PermissionDenied(_inactive_subscription_message(subscription))
 
     free_usage_result = _consume_free_usage(locked_user)
 

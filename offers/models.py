@@ -9,7 +9,7 @@ class OffreStatut(models.TextChoices):
 
 class Category(models.Model):
     name = models.CharField(max_length=100, unique=True)
-    description = models.TextField()
+    description = models.TextField(blank=True, default="")
 
 
 class Offre(models.Model):

@@ -1,3 +1,5 @@
+#C:\Users\Lenovo\django_project\pfe_project2\pfe_project\ai_recommendations\serializers.py
+
 from rest_framework import serializers
 
 
@@ -18,8 +20,12 @@ class RecommendedOfferSerializer(serializers.Serializer):
     createdAt = serializers.DateTimeField()
 
     matchScore = serializers.FloatField()
+    skillsScore = serializers.FloatField()
     semanticScore = serializers.FloatField()
+    keywordSkillsScore = serializers.FloatField(required=False)
     locationBoost = serializers.IntegerField()
+    locationTier = serializers.IntegerField()
+    locationLabel = serializers.CharField()
     budgetBoost = serializers.IntegerField()
     clientRatingBoost = serializers.IntegerField()
     matchLevel = serializers.CharField()
