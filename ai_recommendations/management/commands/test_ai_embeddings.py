@@ -1,3 +1,5 @@
+#C:\Users\Lenovo\django_project\pfe_project2\pfe_project\ai_recommendations\management\commands\test_ai_embeddings.py
+
 from django.core.management.base import BaseCommand
 
 from ai_recommendations.services.embedding_service import (

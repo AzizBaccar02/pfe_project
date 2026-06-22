@@ -1,11 +1,13 @@
-from django.db import transaction
+from django.db import IntegrityError, transaction
 
 from rest_framework import status
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from offers.models import Images, Offre, OffreStatut
+from offers.db_sequence import reset_images_pk_sequence
+from offers.models import Category, Images, Offre, OffreStatut
 from subscriptions.services.usage_service import (
     SubscriptionUsageAction,
     consume_subscription_usage,
@@ -13,6 +15,7 @@ from subscriptions.services.usage_service import (
 from users.models import Role
 
 from .serializers import (
+    CategorySerializer,
     ClientOfferCreateSerializer,
     ClientOfferDetailSerializer,
     ClientOfferListSerializer,
@@ -20,6 +23,37 @@ from .serializers import (
     OfferImageSerializer,
     OfferPublicSerializer,
 )
+
+
+class CategoryListCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        categories = Category.objects.all().order_by("name")
+        serializer = CategorySerializer(categories, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        serializer = CategorySerializer(data=request.data)
+
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        name = serializer.validated_data["name"]
+        description = serializer.validated_data.get("description", "")
+
+        existing = Category.objects.filter(name__iexact=name).first()
+        if existing:
+            return Response(
+                CategorySerializer(existing).data,
+                status=status.HTTP_200_OK,
+            )
+
+        category = Category.objects.create(name=name, description=description)
+        return Response(
+            CategorySerializer(category).data,
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class ClientOfferListCreateView(APIView):
@@ -58,7 +92,10 @@ class ClientOfferListCreateView(APIView):
             context={"request": request},
         )
 
-        if serializer.is_valid():
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
             with transaction.atomic():
                 usage_result = consume_subscription_usage(
                     request.user,
@@ -87,8 +124,16 @@ class ClientOfferListCreateView(APIView):
                 response_data,
                 status=status.HTTP_201_CREATED,
             )
-
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        except PermissionDenied as exc:
+            return Response(
+                {"detail": str(exc.detail)},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        except Exception as exc:
+            return Response(
+                {"detail": f"Could not create offer: {exc}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
 
 class ClientOfferDetailView(APIView):
@@ -241,7 +286,11 @@ class ClientOfferImagesView(APIView):
         created_images = []
 
         for file in files:
-            image = Images.objects.create(offre=offer, url=file)
+            try:
+                image = Images.objects.create(offre=offer, url=file)
+            except IntegrityError:
+                reset_images_pk_sequence()
+                image = Images.objects.create(offre=offer, url=file)
             created_images.append(image)
 
         serializer = OfferImageSerializer(

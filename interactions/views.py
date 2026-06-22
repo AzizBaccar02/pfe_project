@@ -1,3 +1,4 @@
+#interactions\views.py
 from django.db import transaction
 
 from rest_framework import status
@@ -191,6 +192,132 @@ class ClientInterestedAgentsView(APIView):
             context={"request": request},
         )
 
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class ClientOfferReactionsView(APIView):
+    """List all offer reactions on the client's offers (any status)."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if request.user.role != Role.CLIENT:
+            return Response(
+                {"detail": "Only clients can access offer reactions."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        status_param = request.query_params.get("status")
+        offer_id = request.query_params.get("offer_id")
+
+        reactions = (
+            OffreReaction.objects
+            .filter(
+                offre__client=request.user,
+                react=True,
+            )
+            .select_related(
+                "agent",
+                "agent__profile",
+                "agent__profile__localisation",
+                "offre",
+            )
+            .order_by("-createdAt")
+        )
+
+        if status_param is not None and str(status_param).strip():
+            reactions = reactions.filter(
+                status=str(status_param).strip().upper(),
+            )
+
+        if offer_id is not None and str(offer_id).strip():
+            try:
+                reactions = reactions.filter(offre_id=int(offer_id))
+            except ValueError:
+                return Response(
+                    {"detail": "offer_id must be a valid integer."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        serializer = ClientInterestedAgentSerializer(
+            reactions,
+            many=True,
+            context={"request": request},
+        )
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class ClientOfferReactionLookupView(APIView):
+    """Return a single offer reaction for the client (any status)."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if request.user.role != Role.CLIENT:
+            return Response(
+                {"detail": "Only clients can access offer reactions."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        reaction_id = request.query_params.get("reaction_id")
+        offer_id = request.query_params.get("offer_id")
+        agent_id = request.query_params.get("agent_id")
+
+        reactions = (
+            OffreReaction.objects
+            .filter(
+                offre__client=request.user,
+                react=True,
+            )
+            .select_related(
+                "agent",
+                "agent__profile",
+                "agent__profile__localisation",
+                "offre",
+            )
+        )
+
+        if reaction_id is not None and str(reaction_id).strip():
+            try:
+                reactions = reactions.filter(id=int(reaction_id))
+            except ValueError:
+                return Response(
+                    {"detail": "reaction_id must be a valid integer."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        elif offer_id is not None and agent_id is not None:
+            try:
+                reactions = reactions.filter(
+                    offre_id=int(offer_id),
+                    agent_id=int(agent_id),
+                )
+            except ValueError:
+                return Response(
+                    {
+                        "detail": "offer_id and agent_id must be valid integers.",
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        else:
+            return Response(
+                {
+                    "detail": "Provide reaction_id or both offer_id and agent_id.",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        reaction = reactions.order_by("-createdAt").first()
+
+        if not reaction:
+            return Response(
+                {"detail": "Offer reaction not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        serializer = ClientInterestedAgentSerializer(
+            reaction,
+            context={"request": request},
+        )
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 

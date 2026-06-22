@@ -1,3 +1,5 @@
+#subscriptions\admin.py
+
 from django.contrib import admin
 
 from .models import Plan, Subscription
@@ -27,6 +29,7 @@ class SubscriptionAdmin(admin.ModelAdmin):
         "plan",
         "status",
         "isActive",
+        "stripeSubscriptionId",
         "startDate",
         "endDate",
         "createdAt",
@@ -35,6 +38,7 @@ class SubscriptionAdmin(admin.ModelAdmin):
         "usedUsageCount",
     )
     list_filter = ("status", "isActive", "createdAt")
+    ordering = ("-createdAt",)
     search_fields = (
         "user__email",
         "stripeCustomerId",

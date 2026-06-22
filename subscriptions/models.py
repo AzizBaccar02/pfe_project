@@ -1,3 +1,5 @@
+#subscriptions\models.py
+
 from django.conf import settings
 from django.db import models
 from django.utils import timezone
@@ -70,10 +72,10 @@ class Plan(models.Model):
 
 
 class Subscription(models.Model):
-    user = models.OneToOneField(
+    user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
-        related_name="subscription",
+        related_name="subscriptions",
     )
 
     plan = models.ForeignKey(
@@ -100,8 +102,18 @@ class Subscription(models.Model):
 
     # Stripe fields
     stripeCustomerId = models.CharField(max_length=255, blank=True, null=True)
-    stripeSubscriptionId = models.CharField(max_length=255, blank=True, null=True)
-    stripeCheckoutSessionId = models.CharField(max_length=255, blank=True, null=True)
+    stripeSubscriptionId = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        unique=True,
+    )
+    stripeCheckoutSessionId = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        unique=True,
+    )
 
     transactionId = models.CharField(max_length=255, blank=True, null=True)
 
@@ -110,19 +122,18 @@ class Subscription(models.Model):
     createdAt = models.DateTimeField(auto_now_add=True)
     updatedAt = models.DateTimeField(auto_now=True)
 
+    class Meta:
+        ordering = ["-createdAt"]
+
     def __str__(self):
-        return f"{self.user.email} - {self.status}"
+        return f"{self.user.email} - {self.status} (#{self.pk})"
 
     @property
     def has_active_subscription(self):
         if self.status != SubscriptionStatus.ACTIVE or not self.isActive:
             return False
 
-        if self.plan and self.plan.planType == PlanType.DATE:
-            if self.endDate and timezone.now() > self.endDate:
-                return False
-
-        return True
+        return self.is_within_billing_window()
 
     @property
     def can_use_subscription(self):
@@ -133,3 +144,57 @@ class Subscription(models.Model):
             return True
 
         return self.remainingUsageCount > 0
+
+    def sync_expired_state(self, save=True):
+        """
+        Mark ACTIVE subscriptions as EXPIRED once endDate has passed.
+        Returns True when the row was updated.
+        """
+        if self.status != SubscriptionStatus.ACTIVE or not self.isActive:
+            return False
+
+        if not self.endDate:
+            return False
+
+        now = timezone.now()
+        end_date = self.endDate
+        if timezone.is_naive(end_date):
+            end_date = timezone.make_aware(end_date, timezone.utc)
+
+        if now <= end_date:
+            return False
+
+        self.status = SubscriptionStatus.EXPIRED
+        self.isActive = False
+        if save:
+            self.save(
+                update_fields=[
+                    "status",
+                    "isActive",
+                    "updatedAt",
+                ]
+            )
+        return True
+
+    def _aware_datetime(self, value):
+        if value is None:
+            return None
+
+        if timezone.is_naive(value):
+            return timezone.make_aware(value, timezone.utc)
+
+        return value
+
+    def is_within_billing_window(self):
+        now = timezone.now()
+
+        start_date = self._aware_datetime(self.startDate)
+        end_date = self._aware_datetime(self.endDate)
+
+        if start_date and now < start_date:
+            return False
+
+        if end_date and now > end_date:
+            return False
+
+        return True

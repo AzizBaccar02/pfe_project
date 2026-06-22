@@ -14,7 +14,7 @@ load_dotenv(BASE_DIR / ".env")
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-txk_k6=&4^o8sm_w+mewamw9ek+(p&@_5zjwx7#_^alo(gs7sy'
+SECRET_KEY = 'change me'
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
@@ -83,8 +83,8 @@ DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
         'NAME': 'jobmatch_database',
-        'USER': 'postgres',
-        'PASSWORD': '1966',
+        'USER': 'change me',
+        'PASSWORD': 'change me',
         'HOST': '127.0.0.1',
         'PORT': '5432',
     }
@@ -145,7 +145,7 @@ EMAIL_HOST = "smtp.gmail.com"
 EMAIL_PORT = 587
 EMAIL_USE_TLS = True
 EMAIL_HOST_USER = "azizbaccar79@gmail.com"
-EMAIL_HOST_PASSWORD = "lsxi lwjp wsnp ciii"
+EMAIL_HOST_PASSWORD = "change me"
 DEFAULT_FROM_EMAIL = "JobMatch <azizbaccar79@gmail.com>"
 ##################################################################################################
 ASGI_APPLICATION = "config.asgi.application"
